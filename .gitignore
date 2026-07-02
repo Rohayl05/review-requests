@@ -1,0 +1,7 @@
+venv/
+__pycache__/
+*.pyc
+.env
+review_requests.json
+bookings.json
+.DS_Store
