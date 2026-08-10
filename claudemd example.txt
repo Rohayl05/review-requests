@@ -1,0 +1,74 @@
+# Project Instructions
+
+## Project
+
+This project is a proof of concept for converting business customer
+signing-mandate PDFs into normalized authorization rules and Excel workflows.
+
+The complete business and technical specification is located at:
+
+`docs/PROJECT_SPEC.md`
+
+Read that file before planning or implementing any feature.
+
+## Current Build Stage
+
+Implement the project one phase at a time.
+
+Do not attempt to build the complete application in one pass.
+
+The initial task is Phase 1 only:
+
+- project structure;
+- Pydantic domain models;
+- enums;
+- JSON case repository;
+- AED amount normalization;
+- group and workflow data structures;
+- deterministic validation;
+- unit tests.
+
+Do not implement PDF extraction, LLM integration, Streamlit, or Excel export
+until Phase 1 is complete and tested.
+
+## Core Rules
+
+- One case represents one business.
+- No customer data may carry between cases.
+- Preserve supplied letter groups.
+- Derive groups dynamically only when groups are not supplied.
+- For derived groups, A normally represents the strongest authority class.
+- Keep extracted facts separate from derived rules.
+- Every rule must reference source evidence.
+- The LLM must never approve a case.
+- Deterministic Python code must perform validation.
+- Human approval is required before an approved export.
+- Use synthetic data only in tests.
+- Never commit real customer PDFs or customer data.
+
+## Development Standards
+
+- Use Python 3.11 or later.
+- Use Pydantic v2.
+- Use type hints.
+- Use pytest.
+- Keep modules small and focused.
+- Do not use hidden global state.
+- Do not hard-code customer-specific rules.
+- Do not silently swallow errors.
+- Do not claim work is complete without running the relevant tests.
+
+## Working Method
+
+Before implementing a phase:
+
+1. Read the relevant sections of `docs/PROJECT_SPEC.md`.
+2. Inspect the existing repository.
+3. Give a concise implementation plan.
+4. Implement only the requested phase.
+5. Run tests.
+6. Fix failures.
+7. Summarize files changed, decisions, assumptions, and commands.
+
+If the specification is ambiguous, choose a conservative and configurable
+implementation. Do not invent a banking rule.
