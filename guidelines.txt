@@ -1,0 +1,1243 @@
+You are helping me build an internship-level proof of concept for a banking document automation use case.
+
+First, read this entire specification carefully. Then inspect the current repository. If it is empty, initialize the project using the structure below.
+
+Do not ask me to make routine technical decisions. Choose simple, explainable defaults and document them. If an important business rule is genuinely unknown, represent it as configurable or mark it for human review rather than inventing it.
+
+==================================================
+1. BUSINESS PROBLEM
+==================================================
+
+Business customers provide one or a small handful of PDF documents describing:
+
+- authorized payment signatories;
+- non-signatories who may initiate, verify or participate in workflows;
+- signing groups, classes or roles;
+- whether a person may sign singly or jointly;
+- monetary authorization limits;
+- which other groups or named people they may sign with;
+- payment or account restrictions;
+- amendments to earlier mandates.
+
+The documents may be board resolutions, authorized signatory lists, account mandates, amendments or similar business documents.
+
+The existing process is manual or semi-manual. A user reads the PDFs, identifies the signatories and rules, assigns normalized groups such as A, B, C and D, derives valid payment approval combinations, and enters the result into Excel.
+
+The goal is to automate most of this work while retaining human review.
+
+The output may eventually be entered into a digital banking system. Therefore this proof of concept must prioritize:
+
+- correctness;
+- traceability;
+- explainability;
+- deterministic validation;
+- human approval;
+- no silent assumptions.
+
+This is not just a PDF table extraction project. It is a document-to-authorization-rules pipeline.
+
+==================================================
+2. PROCESSING UNIT AND DATA ISOLATION
+==================================================
+
+One processing case represents one business customer.
+
+Each case normally contains one or a small handful of related PDFs.
+
+Every new business case must start with fresh case data.
+
+Do not carry any of the following between customers:
+
+- names;
+- signatories;
+- groups;
+- monetary limits;
+- extracted rules;
+- workflows;
+- document context;
+- model conversation history.
+
+Only the software schema, prompts, validation logic and normalization policy are reusable.
+
+Create a unique case ID for each case.
+
+All case artifacts should be stored under a case-specific directory.
+
+==================================================
+3. CURRENCY ASSUMPTION
+==================================================
+
+The expected currency is UAE dirhams.
+
+Normalize the following kinds of expressions to currency code AED:
+
+- AED
+- DHS
+- Dhs
+- Dh
+- dirhams
+- UAE dirhams
+
+Store monetary amounts as numeric values.
+
+Examples:
+
+- "DHS 500K" becomes 500000
+- "AED 5 million" becomes 5000000
+- "10m dirhams" becomes 10000000
+
+Do not represent unlimited authority using zero, null or an arbitrary very large number.
+
+Use:
+
+- maximum_amount_aed: null
+- is_unlimited: true
+
+If a source unexpectedly contains another currency, do not convert it automatically. Create a review exception.
+
+==================================================
+4. CORE PIPELINE
+==================================================
+
+Implement the application as separate stages:
+
+1. Case creation
+2. PDF ingestion
+3. Text and table extraction
+4. OCR fallback where required
+5. Document classification
+6. Structured fact extraction
+7. Cross-document name resolution
+8. Conflict and amendment detection
+9. Authority profile creation
+10. Group preservation or dynamic group creation
+11. Workflow derivation
+12. Deterministic validation
+13. Human review
+14. Excel export
+
+The language model must not directly create the final approved Excel.
+
+The required flow is:
+
+PDF documents
+    -> extracted pages and evidence
+    -> structured case JSON
+    -> normalized authority model
+    -> deterministic workflow generation
+    -> deterministic validation
+    -> draft Excel
+    -> human review
+    -> approved export
+
+Keep extracted facts separate from derived conclusions.
+
+==================================================
+5. GROUPING POLICY
+==================================================
+
+There are two grouping modes.
+
+MODE 1: GROUPS PROVIDED BY THE CUSTOMER DOCUMENT
+
+If the documents explicitly define lettered groups such as A, B, C or D:
+
+- preserve those group labels;
+- preserve the customer-provided group membership;
+- preserve the associated rules;
+- do not rename the groups;
+- do not silently reorder them;
+- flag internal inconsistencies for review.
+
+MODE 2: GROUPS NOT PROVIDED
+
+If the documents describe people, job roles or authorities but do not provide usable letter groups:
+
+- create groups dynamically;
+- Group A should normally represent the strongest authority class;
+- Group B should represent the next distinct authority class;
+- continue with C, D, E and so on;
+- assign the same group only to participants with operationally equivalent authority;
+- store an explanation for every derived group assignment.
+
+Do not assign groups based only on job titles.
+
+Do not assign groups based only on the order in which people appear.
+
+Create a structured authority profile for each participant before grouping.
+
+An authority profile may include:
+
+- participant type;
+- allowed action;
+- single signing limit;
+- joint signing limit;
+- unlimited status;
+- required partner groups;
+- required named partners;
+- prohibited partners;
+- number of required signers;
+- payment scope;
+- account scope;
+- special conditions.
+
+Suggested authority ordering considerations:
+
+1. A signatory generally ranks above an initiate-only or verify-only participant.
+2. For otherwise equivalent authority, single signing is generally broader than joint-only signing.
+3. Unlimited authority is generally broader than bounded authority.
+4. A higher amount limit is generally broader than a lower limit.
+5. Fewer partner restrictions generally represent broader authority.
+6. General payment authority is broader than authority restricted to one payment or account type.
+
+Do not collapse this into one unexplained numeric score.
+
+Some authority profiles may be different without being strictly comparable.
+
+Example:
+
+- Person X may sign singly up to AED 100,000.
+- Person Y may sign jointly up to AED 10,000,000.
+
+These people should usually be separate authority classes. The program should document the chosen letter ordering and send ambiguous ordering to review.
+
+Most importantly:
+
+All members of one normalized group must behave equivalently in the generated workflow model.
+
+==================================================
+6. PARTICIPANT TYPES
+==================================================
+
+Support at least:
+
+- SIGNATORY
+- NON_SIGNATORY
+- INITIATOR
+- VERIFIER
+- AUTHORIZER
+- UNKNOWN
+
+A person may have more than one operational capability.
+
+Do not allow a person who is exclusively a non-signatory to become the sole payment authorizer.
+
+Preserve original source wording such as:
+
+- initiate;
+- verify;
+- authorize;
+- sign singly;
+- sign jointly.
+
+Map it to normalized capabilities while retaining the original evidence.
+
+==================================================
+7. SIGNING RULE MODEL
+==================================================
+
+Support:
+
+- single signer authority;
+- joint authority;
+- group-based partner requirements;
+- named-person partner requirements;
+- multiple required signers from one group;
+- mixed group combinations;
+- bounded amounts;
+- unlimited amounts;
+- minimum and maximum amount ranges;
+- non-signatory plus signatory workflows;
+- payment-specific restrictions;
+- account-specific restrictions;
+- explicitly prohibited combinations;
+- unclear or unsupported rules.
+
+Example normalized workflows:
+
+- 1A
+- 2A
+- 1A + 1B
+- 2C
+- 1E + 1C + 1B
+
+The code means:
+
+- 1A = one member of Group A
+- 2B = two distinct members of Group B
+- 1A + 1C = one member of A and one distinct member of C
+
+Do not assume the same individual may satisfy two positions in one workflow.
+
+Store workflow components structurally. The formatted code such as "1A+1B" must be a derived display value, not the primary data structure.
+
+Example:
+
+{
+  "components": [
+    {"group_id": "A", "count": 1},
+    {"group_id": "B", "count": 1}
+  ]
+}
+
+Named-person restrictions must not be generalized to an entire group.
+
+Example:
+
+If the source states:
+
+"Ahmed must sign jointly with Fatima"
+
+do not convert that to:
+
+"1A + 1B"
+
+unless every valid A and B member combination is genuinely permitted.
+
+The normalized workflow must be capable of retaining named participant constraints.
+
+==================================================
+8. REQUIRED DATA MODEL
+==================================================
+
+Use Pydantic models.
+
+Create models for at least:
+
+A. BusinessCase
+- case_id
+- customer_name
+- created_at
+- status
+- source_documents
+- expected_currency
+- review_status
+- approved_by
+- approved_at
+
+B. SourceDocument
+- document_id
+- filename
+- document_type
+- document_date
+- effective_date
+- supersedes_document_ids
+- extraction_method
+- extraction_quality
+- page_count
+- file_hash
+
+C. SourceEvidence
+- evidence_id
+- document_id
+- page_number
+- exact_text
+- bounding_box if available
+- extraction_method
+- evidence_hash
+
+D. Participant
+- participant_id
+- full_name
+- normalized_name
+- aliases
+- user_id
+- original_role
+- participant_types
+- source_group
+- normalized_group
+- group_assignment_mode
+- group_assignment_reason
+- evidence_ids
+- extraction_confidence
+- review_status
+
+E. AuthorityRule
+- rule_id
+- subject_participant_ids
+- subject_group_ids
+- action
+- signing_mode
+- minimum_amount_aed
+- maximum_amount_aed
+- is_unlimited
+- required_signer_count
+- required_partner_groups
+- required_named_participants
+- prohibited_partner_groups
+- prohibited_named_participants
+- payment_scope
+- account_scope
+- conditions
+- evidence_ids
+- extraction_confidence
+- interpretation_confidence
+- review_status
+
+F. AuthorityGroup
+- group_id
+- label
+- assignment_mode
+- member_participant_ids
+- authority_signature
+- assignment_reason
+- evidence_ids
+- review_status
+
+G. Workflow
+- workflow_id
+- components
+- named_participant_constraints
+- minimum_amount_aed
+- maximum_amount_aed
+- is_unlimited
+- payment_scope
+- account_scope
+- conditions
+- derived_from_rule_ids
+- derivation_explanation
+- validation_status
+- review_status
+
+H. ValidationIssue
+- issue_id
+- severity
+- code
+- message
+- affected_entity_type
+- affected_entity_ids
+- evidence_ids
+- suggested_reviewer_action
+- resolution_status
+- reviewer_comment
+
+I. ReviewDecision
+- decision_id
+- entity_type
+- entity_id
+- decision
+- reviewer_name
+- timestamp
+- comment
+- previous_value
+- approved_value
+
+Use enums where appropriate.
+
+==================================================
+9. LLM BOUNDARY
+==================================================
+
+Create a provider interface so the extraction engine is not tied to one vendor.
+
+For the local proof of concept, support an Ollama-compatible provider.
+
+The provider interface should allow another LLM integration later without rewriting the business logic.
+
+The LLM may be used for:
+
+- identifying candidate participants;
+- extracting signing mandate statements;
+- classifying document clauses;
+- interpreting natural-language conditions;
+- identifying possible amendments;
+- proposing normalized structured facts;
+- linking clauses to participants;
+- suggesting whether two authority profiles appear equivalent.
+
+The LLM must not be the only mechanism used for:
+
+- amount comparisons;
+- range overlap checks;
+- range gap checks;
+- workflow formatting;
+- unique-signer enforcement;
+- duplicate ID detection;
+- schema validation;
+- approval status;
+- final export eligibility.
+
+Require the LLM to return schema-constrained JSON.
+
+Reject responses that do not validate against the Pydantic schema.
+
+Do not silently repair meaning-changing errors.
+
+If JSON syntax can be safely repaired without changing content, allow one controlled repair attempt and record that it occurred.
+
+Every extracted or interpreted business rule must reference at least one evidence ID.
+
+If no evidence is available, the item must fail validation.
+
+==================================================
+10. EXTRACTION APPROACH
+==================================================
+
+Use a modular extraction interface.
+
+Recommended initial choices:
+
+- PyMuPDF for PDF page text and coordinates;
+- pdfplumber as an optional table/text fallback;
+- OCR as a separate fallback adapter;
+- Pydantic for schemas;
+- pandas and openpyxl for Excel generation;
+- Streamlit for the initial reviewer interface;
+- pytest for tests.
+
+Do not make OCR mandatory for clean, text-based PDFs.
+
+Detect pages with insufficient extractable text and mark them as OCR candidates.
+
+Preserve:
+
+- document ID;
+- page number;
+- exact source text;
+- extraction method.
+
+Do not send an entire multi-document case to the LLM as one unstructured prompt.
+
+Extract and process document pages or logical sections, then consolidate structured results at case level.
+
+==================================================
+11. NAME RESOLUTION
+==================================================
+
+The same participant may appear differently across several PDFs.
+
+Support:
+
+- case normalization;
+- extra whitespace removal;
+- punctuation normalization;
+- repeated middle names;
+- initials;
+- minor OCR variations;
+- user IDs as strong matching evidence.
+
+Do not automatically merge two names solely because they are similar.
+
+Generate a merge candidate with:
+
+- similarity evidence;
+- supporting document references;
+- merge confidence;
+- review requirement.
+
+Any uncertain identity resolution must remain reviewable.
+
+==================================================
+12. MULTIPLE DOCUMENTS AND PRECEDENCE
+==================================================
+
+A business case may include:
+
+- original mandate;
+- board resolution;
+- signatory list;
+- amendment;
+- replacement mandate.
+
+Implement explicit document precedence support.
+
+Use a later document only when the source explicitly provides sufficient evidence such as:
+
+- an effective date;
+- an amendment statement;
+- a superseding statement;
+- a replacement statement.
+
+Do not assume the newest uploaded file is legally controlling.
+
+Do not assume the PDF modification timestamp is the effective date.
+
+If two active documents conflict and precedence cannot be established, create a RED validation issue and block final approval.
+
+==================================================
+13. VALIDATION ENGINE
+==================================================
+
+Implement validation as deterministic Python rules.
+
+Use severity levels:
+
+- INFO
+- WARNING
+- ERROR
+- BLOCKING
+
+At minimum validate:
+
+1. Every derived rule has source evidence.
+2. Every workflow references existing rules.
+3. Every participant referenced by a rule exists.
+4. Every group referenced by a workflow exists.
+5. Every group has at least one member.
+6. A participant is not duplicated within one workflow.
+7. Two required signer positions cannot be fulfilled by one person.
+8. Maximum amount is not lower than minimum amount.
+9. Unlimited is represented consistently.
+10. Joint signing requires at least two distinct signing positions.
+11. A source statement saying "singly" is not converted only into a joint workflow.
+12. A named-person restriction is not generalized to the whole group.
+13. An exclusively non-signatory participant cannot authorize alone.
+14. Workflow ranges do not conflict unexpectedly.
+15. Detect amount-range gaps.
+16. Detect amount-range overlaps.
+17. Detect duplicate workflows.
+18. Detect contradictory participant authorities.
+19. Detect an unsupported currency.
+20. Detect rules with missing or low-quality evidence.
+21. Detect unresolved duplicate-person candidates.
+22. Detect unresolved cross-document conflicts.
+23. Detect groups whose members have non-equivalent authority signatures.
+24. Detect an AI-generated person not found in evidence.
+25. Detect an AI-generated monetary amount not present in or clearly derived from evidence.
+26. Block approval if any BLOCKING issue remains unresolved.
+
+Do not assume every overlap is invalid.
+
+Some mandates may intentionally allow multiple valid approval combinations for the same amount.
+
+Classify overlaps as:
+
+- equivalent duplicate;
+- valid alternative workflow;
+- possible conflict;
+- definite conflict.
+
+If the system cannot determine which one applies, send it to review.
+
+==================================================
+14. HUMAN REVIEW INTERFACE
+==================================================
+
+Create a simple Streamlit application.
+
+Required screens or sections:
+
+A. Create Case
+- customer name;
+- upload one or more PDFs;
+- create isolated case.
+
+B. Process Case
+- show processing stages;
+- show extraction success or failure per document/page.
+
+C. Participants
+- extracted name;
+- source role;
+- participant type;
+- supplied group;
+- normalized group;
+- assignment reason;
+- evidence;
+- confidence;
+- approve, edit or reject.
+
+D. Authority Rules
+- normalized rule;
+- source text;
+- source document and page;
+- extracted amount;
+- partner constraints;
+- approve, edit or reject.
+
+E. Groups
+- group label;
+- members;
+- authority signature;
+- assignment mode;
+- assignment explanation;
+- approve, edit or reject.
+
+F. Workflows
+- display code;
+- structural components;
+- amount range;
+- derivation explanation;
+- source rules;
+- validation result;
+- approve, edit or reject.
+
+G. Exceptions
+- severity;
+- explanation;
+- affected data;
+- source evidence;
+- reviewer resolution.
+
+H. Export
+- draft export;
+- approved export;
+- prevent approved export while blocking issues remain.
+
+The UI must show exact source evidence adjacent to every important extracted or derived result.
+
+Do not display confidence alone as proof.
+
+==================================================
+15. EXCEL OUTPUT
+==================================================
+
+Generate an .xlsx workbook using openpyxl.
+
+Required sheets:
+
+1. Case Summary
+2. Participants
+3. Extracted Mandates
+4. Normalized Groups
+5. Rules and Workflows
+6. Evidence and Review
+7. Validation Issues
+8. Audit Log
+
+Each system-relevant entity should have a stable ID.
+
+Participants sheet columns should include:
+
+- Participant ID
+- Full Name
+- User ID
+- Participant Type
+- Original Role
+- Source Group
+- Normalized Group
+- Group Assignment Mode
+- Group Assignment Reason
+- Review Status
+
+Extracted Mandates columns should include:
+
+- Rule ID
+- Subject
+- Action
+- Signing Mode
+- Minimum Amount AED
+- Maximum Amount AED
+- Unlimited
+- Required Partners
+- Named-Person Constraints
+- Payment Scope
+- Account Scope
+- Conditions
+- Evidence IDs
+- Review Status
+
+Normalized Groups columns should include:
+
+- Group
+- Assignment Mode
+- Members
+- Authority Signature
+- Assignment Reason
+- Evidence IDs
+- Review Status
+
+Rules and Workflows columns should include:
+
+- Workflow ID
+- Display Code
+- Structured Components
+- Minimum Amount AED
+- Maximum Amount AED
+- Unlimited
+- Named-Person Constraints
+- Payment Scope
+- Account Scope
+- Derived Rule IDs
+- Derivation Explanation
+- Validation Status
+- Review Status
+
+Evidence and Review columns should include:
+
+- Evidence ID
+- Entity ID
+- Source Document
+- Page
+- Exact Source Text
+- AI Interpretation
+- Extraction Confidence
+- Interpretation Confidence
+- Reviewer Decision
+- Reviewer Comment
+
+Validation Issues columns should include:
+
+- Issue ID
+- Severity
+- Code
+- Message
+- Affected Entities
+- Evidence IDs
+- Resolution Status
+- Reviewer Comment
+
+Use clear formatting, frozen headers, filters, sensible widths and amount number formats.
+
+Do not merge cells in system-ingestion sheets.
+
+Keep system-ready data rectangular and machine-readable.
+
+Include an obvious label stating whether the workbook is:
+
+- DRAFT
+- REVIEWED
+- APPROVED
+
+==================================================
+16. AUDITABILITY AND SECURITY
+==================================================
+
+Do not log full PDF contents unnecessarily.
+
+Do not expose one case's data in another case.
+
+Use safe filenames and validate file types.
+
+Compute a SHA-256 hash for each uploaded source PDF.
+
+Record:
+
+- original filename;
+- case ID;
+- file hash;
+- processing timestamp;
+- extraction method;
+- model provider;
+- model name;
+- prompt version;
+- schema version;
+- validation version;
+- reviewer changes;
+- export timestamp.
+
+Do not claim that the software makes a legal determination.
+
+Use review-oriented language such as:
+
+- extracted;
+- interpreted;
+- proposed;
+- derived;
+- requires approval.
+
+Do not label AI-generated output as legally approved unless a reviewer has explicitly approved the case.
+
+==================================================
+17. PROJECT STRUCTURE
+==================================================
+
+Use a structure similar to:
+
+project_root/
+  README.md
+  pyproject.toml
+  .env.example
+  .gitignore
+
+  app.py
+
+  src/
+    mandate_automation/
+      __init__.py
+
+      config.py
+      constants.py
+      enums.py
+
+      models/
+        __init__.py
+        case.py
+        document.py
+        evidence.py
+        participant.py
+        authority.py
+        group.py
+        workflow.py
+        validation.py
+        review.py
+
+      ingestion/
+        __init__.py
+        pdf_extractor.py
+        table_extractor.py
+        ocr_adapter.py
+        document_classifier.py
+
+      llm/
+        __init__.py
+        base.py
+        ollama_provider.py
+        prompts.py
+        structured_extraction.py
+
+      normalization/
+        __init__.py
+        amount_parser.py
+        currency.py
+        name_resolver.py
+        authority_signature.py
+        group_assigner.py
+
+      rules/
+        __init__.py
+        rule_interpreter.py
+        workflow_generator.py
+        workflow_formatter.py
+
+      validation/
+        __init__.py
+        engine.py
+        participant_rules.py
+        authority_rules.py
+        workflow_rules.py
+        evidence_rules.py
+        conflict_rules.py
+
+      review/
+        __init__.py
+        review_service.py
+        audit_service.py
+
+      export/
+        __init__.py
+        excel_exporter.py
+
+      storage/
+        __init__.py
+        case_repository.py
+        file_storage.py
+
+      ui/
+        __init__.py
+        case_page.py
+        participants_page.py
+        rules_page.py
+        groups_page.py
+        workflows_page.py
+        exceptions_page.py
+        export_page.py
+
+  prompts/
+    extraction_prompt.md
+    consolidation_prompt.md
+    group_suggestion_prompt.md
+    prompt_version.json
+
+  schemas/
+    case_output.schema.json
+
+  tests/
+    fixtures/
+    test_amount_parser.py
+    test_group_assigner.py
+    test_workflow_generator.py
+    test_validation_engine.py
+    test_excel_exporter.py
+    test_case_isolation.py
+
+  data/
+    .gitkeep
+
+Do not commit real customer documents or extracted customer data.
+
+==================================================
+18. MVP BOUNDARIES
+==================================================
+
+The first version should support:
+
+- English-language PDFs;
+- text-based PDFs;
+- optional OCR fallback interface;
+- one business case at a time;
+- a handful of PDFs per case;
+- AED amounts;
+- signatory and non-signatory participants;
+- single and joint signing;
+- supplied groups;
+- dynamically derived groups;
+- group-based combinations;
+- named-person constraints;
+- bounded and unlimited amounts;
+- structured JSON;
+- deterministic validation;
+- evidence-linked Excel;
+- human review.
+
+Do not overengineer the first version.
+
+Do not add:
+
+- production authentication;
+- production database infrastructure;
+- automatic production-system integration;
+- autonomous approval;
+- model fine-tuning;
+- vector databases;
+- RAG unless a concrete need emerges;
+- distributed queues;
+- microservices;
+- Kubernetes;
+- unnecessary cloud services.
+
+Use local JSON-based case storage initially, but hide storage behind a repository interface so it can be replaced later.
+
+==================================================
+19. TEST SCENARIOS
+==================================================
+
+Create synthetic test data only. Clearly label it as synthetic.
+
+Do not include real customer or employee names.
+
+Create tests for at least these scenarios.
+
+SCENARIO 1: PROVIDED GROUPS
+
+- Group A: may sign singly without limit.
+- Group B: two members jointly up to AED 1,000,000.
+- Group C: one C plus one B up to AED 5,000,000.
+
+Expected:
+- Preserve A, B and C.
+- Generate 1A unlimited.
+- Generate 2B up to AED 1,000,000.
+- Generate 1C+1B up to AED 5,000,000.
+
+SCENARIO 2: DYNAMIC GROUPS
+
+- Person One may sign singly without limit.
+- Person Two and Person Three may each sign jointly up to AED 5,000,000 with Person One.
+- No letter groups are supplied.
+
+Expected:
+- Derive A for Person One.
+- Derive B for equivalent Person Two and Person Three.
+- Preserve named or equivalent partner constraints correctly.
+- Explain every assignment.
+
+SCENARIO 3: NAMED PERSON RESTRICTION
+
+- Person One may sign only with Person Two up to AED 500,000.
+- Person Two shares a group with Person Three.
+
+Expected:
+- Do not allow Person One plus Person Three.
+- Preserve the Person Two restriction.
+
+SCENARIO 4: CONTRADICTORY DOCUMENTS
+
+- Original document gives Person One a limit of AED 500,000.
+- Another document gives a limit of AED 1,000,000.
+- No explicit amendment or precedence is present.
+
+Expected:
+- Create a blocking conflict.
+- Do not approve the case automatically.
+
+SCENARIO 5: NON-SIGNATORY
+
+- Person One may initiate and verify but may not sign.
+- Person Two is a signatory.
+
+Expected:
+- Person One cannot authorize alone.
+- A workflow may include Person One only if the target workflow model permits a non-signing operational step plus a valid signatory.
+
+SCENARIO 6: RANGE VALIDATION
+
+- Workflow A covers AED 0 to AED 100,000.
+- Workflow B covers AED 200,000 to AED 500,000.
+
+Expected:
+- Detect the uncovered range.
+
+SCENARIO 7: VALID ALTERNATIVES
+
+- Either 1A or 2B may approve up to AED 1,000,000.
+
+Expected:
+- Keep both as valid alternative workflows.
+- Do not classify the overlap automatically as a conflict.
+
+SCENARIO 8: UNEXPECTED CURRENCY
+
+- A clause contains a USD limit.
+
+Expected:
+- Preserve the source clause.
+- Create a review exception.
+- Do not convert to AED automatically.
+
+SCENARIO 9: CASE ISOLATION
+
+- Process Business One.
+- Create Business Two.
+
+Expected:
+- No participant, group, rule, evidence or workflow from Business One appears in Business Two.
+
+==================================================
+20. INITIAL IMPLEMENTATION SEQUENCE
+==================================================
+
+Work in small, testable phases.
+
+PHASE 1
+
+Create:
+
+- project structure;
+- configuration;
+- enums;
+- complete Pydantic domain model;
+- JSON case repository;
+- amount normalization;
+- currency normalization;
+- workflow component model;
+- core validators;
+- unit tests.
+
+PHASE 2
+
+Create:
+
+- PDF text extraction;
+- evidence objects;
+- document metadata;
+- source file hashes;
+- clean handling of extraction failures.
+
+PHASE 3
+
+Create:
+
+- LLM provider interface;
+- Ollama provider;
+- versioned structured extraction prompt;
+- schema validation;
+- extraction of participants and authority clauses.
+
+PHASE 4
+
+Create:
+
+- authority signatures;
+- supplied-group preservation;
+- dynamic group assignment;
+- deterministic workflow generation;
+- explanation fields.
+
+PHASE 5
+
+Create:
+
+- Streamlit review application;
+- editing and approval actions;
+- exception resolution;
+- audit records.
+
+PHASE 6
+
+Create:
+
+- Excel draft export;
+- approved export controls;
+- final end-to-end synthetic demonstration.
+
+After each phase:
+
+- run tests;
+- fix failures;
+- summarize what was implemented;
+- list files created or changed;
+- identify assumptions;
+- explain how to run the current version.
+
+==================================================
+21. CODING STANDARDS
+==================================================
+
+Use:
+
+- Python 3.11 or later;
+- type hints throughout;
+- Pydantic v2;
+- small focused modules;
+- dependency injection where useful;
+- docstrings for business-critical logic;
+- explicit exceptions;
+- structured logging;
+- pytest;
+- deterministic functions for validation and workflow generation.
+
+Avoid:
+
+- giant functions;
+- duplicated business logic;
+- hard-coded customer rules;
+- hidden global state;
+- LLM calls inside deterministic validators;
+- using formatted workflow strings as the database model;
+- silently swallowing errors;
+- automatically approving low-confidence output.
+
+==================================================
+22. README REQUIREMENTS
+==================================================
+
+The README must explain:
+
+- the business problem;
+- the difference between extraction, interpretation, normalization and workflow generation;
+- why the LLM is not the final decision maker;
+- the case isolation model;
+- the supplied-versus-derived grouping policy;
+- how A, B, C and later groups are assigned;
+- how named-person constraints are handled;
+- the data flow;
+- local installation;
+- Ollama configuration;
+- how to run tests;
+- how to launch Streamlit;
+- how to create a case;
+- how to export a draft workbook;
+- limitations;
+- review responsibilities;
+- synthetic-data warning.
+
+Include a Mermaid architecture diagram.
+
+==================================================
+23. WHAT TO DO NOW
+==================================================
+
+Start by inspecting the repository.
+
+Then implement PHASE 1 only.
+
+Before coding, give me a short implementation plan listing:
+
+- the modules you will create;
+- the key model relationships;
+- the initial validation rules;
+- the assumptions you are making.
+
+Then create the files, implement Phase 1, run the tests, and fix any failures.
+
+At the end, report:
+
+1. What you built
+2. The directory structure
+3. Test results
+4. Important design decisions
+5. Remaining limitations
+6. Exact commands to run the project
+
+Do not implement later phases yet unless they are needed to make Phase 1 testable.
